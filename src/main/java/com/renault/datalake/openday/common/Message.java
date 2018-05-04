@@ -25,7 +25,7 @@ public class Message {
         msg.advertiserAddr = obj.get("adv_addr").asText();
         msg.advertiserConstructor = obj.get("adv_constructor").asText();
         msg.snifferAddr = obj.get("sniffer_addr").asText();
-        msg.datetime = new Instant((long) (obj.get("time").asDouble() * 1000L));
+        msg.datetime = new Instant((long) (obj.get("datetime").asDouble() * 1000L));
 
         return msg;
     }
