@@ -6,6 +6,8 @@ import org.apache.beam.sdk.coders.AvroCoder;
 import org.apache.beam.sdk.coders.DefaultCoder;
 import org.joda.time.Instant;
 
+import java.io.IOException;
+
 
 @DefaultCoder(AvroCoder.class)
 public class Message {
@@ -15,21 +17,16 @@ public class Message {
     public String snifferAddr;
     public Instant datetime;
 
-    public static Message fromJson(String json) {
-        ObjectMapper mapper = new ObjectMapper();
-        try {
-            JsonNode obj = mapper.readTree(json);
+    public static Message fromJson(String json) throws IOException {
+        JsonNode obj = new ObjectMapper().readTree(json);
+        Message msg = new Message();
 
-            Message msg = new Message();
-            msg.rssi = obj.get("rssi").asInt();
-            msg.advertiserAddr = obj.get("adv_addr").asText();
-            msg.advertiserConstructor = obj.get("adv_constructor").asText();
-            msg.snifferAddr = obj.get("sniffer_addr").asText();
-            msg.datetime = new Instant((long) (obj.get("time").asDouble() * 1000L));
-            return msg;
-        } catch (Exception exc) {
-            System.out.println("Unable to parse message: " + json);
-            return null;
-        }
+        msg.rssi = obj.get("rssi").asInt();
+        msg.advertiserAddr = obj.get("adv_addr").asText();
+        msg.advertiserConstructor = obj.get("adv_constructor").asText();
+        msg.snifferAddr = obj.get("sniffer_addr").asText();
+        msg.datetime = new Instant((long) (obj.get("time").asDouble() * 1000L));
+
+        return msg;
     }
 }

@@ -16,6 +16,10 @@ import org.apache.beam.sdk.transforms.windowing.Window;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollection;
 import org.joda.time.Duration;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.io.IOException;
 
 
 public class BeaconAnalytics {
@@ -31,19 +35,24 @@ public class BeaconAnalytics {
     }
 
     static class SerializeFn extends DoFn<PubsubMessage, Message> {
+        // TODO: transform to MapElements ?
+
+        private static final Logger LOG = LoggerFactory.getLogger(SerializeFn.class);
 
         @ProcessElement
         public void processElement(ProcessContext c) {
             String json = new String(c.element().getPayload());
             try {
                 Message msg = Message.fromJson(json);
-                if (msg != null)
-                    c.outputWithTimestamp(msg, msg.datetime);
+                c.outputWithTimestamp(msg, msg.datetime);
+            } catch (IOException exc) {
+                LOG.warn("Unable to serialize message: {}", json, exc);
             } catch (Exception exc) {
-                // TODO: better error handling
+                LOG.warn("Unable to output timestamped message", exc);
             }
         }
 
+        // TODO: check if there is a way to stamp message when publishing to Google PubSub
         @Override
         public Duration getAllowedTimestampSkew() {
             return  Duration.millis(Long.MAX_VALUE);
@@ -51,6 +60,7 @@ public class BeaconAnalytics {
     }
 
     static class KeyBySnifferFn extends DoFn<Message, KV<String, Message>> {
+        // TODO: transform to MapElements
 
         @ProcessElement
         public void processElement(ProcessContext c) {
@@ -60,6 +70,7 @@ public class BeaconAnalytics {
     }
 
     static class FormatFn extends DoFn<KV<String, Long>, String> {
+        // TODO: transform to MapElements
 
         @ProcessElement
         public void processElement(ProcessContext c) {
