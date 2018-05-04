@@ -42,13 +42,18 @@ public class BeaconAnalytics {
         @ProcessElement
         public void processElement(ProcessContext c) {
             String json = new String(c.element().getPayload());
+            Message msg;
             try {
-                Message msg = Message.fromJson(json);
-                c.outputWithTimestamp(msg, msg.datetime);
-            } catch (IOException exc) {
-                LOG.warn("Unable to serialize message: {}", json, exc);
+                msg = Message.fromJson(json);
             } catch (Exception exc) {
-                LOG.warn("Unable to output timestamped message", exc);
+                LOG.warn("Unable to serialize message: {}", json, exc);
+                return;
+            }
+            try {
+                if (msg != null)
+                    c.outputWithTimestamp(msg, msg.datetime);
+            } catch (Exception exc) {
+                LOG.warn("Unable to output timestamped message: {}", json, exc);
             }
         }
 
