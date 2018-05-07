@@ -19,8 +19,6 @@ import org.joda.time.Duration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.IOException;
-
 
 public class BeaconAnalytics {
 
@@ -74,6 +72,14 @@ public class BeaconAnalytics {
         }
     }
 
+    static class KeyByAdvertiserFn extends DoFn<Message, KV<String, Message>> {
+        @ProcessElement
+        public void processElement(ProcessContext c) {
+            Message msg = c.element();
+            c.output(KV.of(msg.advertiserAddr, msg));
+        }
+    }
+
     static class FormatFn extends DoFn<KV<String, Long>, String> {
         // TODO: transform to MapElements
 
@@ -102,11 +108,21 @@ public class BeaconAnalytics {
         PCollection<Message> windowedInput = input.apply(
                 Window.into(FixedWindows.of(Duration.standardMinutes(1))));
 
-        windowedInput
-            .apply(ParDo.of(new KeyBySnifferFn()))
-            .apply(Count.perKey())
-            .apply(ParDo.of(new FormatFn()))
-            .apply(TextIO.write().withWindowedWrites().withNumShards(1).to("/tmp/results"));
+        PCollection<KV<String,Message>> bySnifferInput = windowedInput
+                .apply(ParDo.of(new KeyBySnifferFn()));
+
+        PCollection<KV<String,Message>> byAdvertiserInput = windowedInput
+                .apply(ParDo.of(new KeyByAdvertiserFn()));
+
+        bySnifferInput
+                .apply(Count.perKey())
+                .apply(ParDo.of(new FormatFn()))
+                .apply(TextIO.write().withWindowedWrites().withNumShards(1).to("/tmp/by_sniffer"));
+
+        byAdvertiserInput
+                .apply(Count.perKey())
+                .apply(ParDo.of(new FormatFn()))
+                .apply(TextIO.write().withWindowedWrites().withNumShards(1).to("/tmp/by_advertiser"));
 
         p.run().waitUntilFinish();
     }
