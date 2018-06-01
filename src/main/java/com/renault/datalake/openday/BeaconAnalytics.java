@@ -204,11 +204,6 @@ public class BeaconAnalytics {
         PCollection<BeaconSniffer> nearestSniffer = groupByAdvertiser
                 .apply(ParDo.of(new PredictSnifferFn()));
 
-        // Write to text file
-        nearestSniffer
-                .apply(ParDo.of(new FormatAsTextFn()))
-                .apply(TextIO.write().withWindowedWrites().withNumShards(1).to("/tmp/beam/nearest_sniffer_"));
-
         // Write to BigQuery
         String tableUri = projectId + ":" + dataset + "." + table;
         nearestSniffer
