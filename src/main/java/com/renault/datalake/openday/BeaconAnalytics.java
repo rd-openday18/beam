@@ -1,8 +1,14 @@
 package com.renault.datalake.openday;
 
+import com.google.api.services.bigquery.model.TableFieldSchema;
+import com.google.api.services.bigquery.model.TableRow;
+import com.google.api.services.bigquery.model.TableSchema;
+import com.google.common.collect.ImmutableList;
+import com.renault.datalake.openday.common.BeaconSniffer;
 import com.renault.datalake.openday.common.Message;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.io.TextIO;
+import org.apache.beam.sdk.io.gcp.bigquery.BigQueryIO;
 import org.apache.beam.sdk.io.gcp.pubsub.PubsubIO;
 import org.apache.beam.sdk.io.gcp.pubsub.PubsubMessage;
 import org.apache.beam.sdk.options.Default;
@@ -37,6 +43,16 @@ public class BeaconAnalytics {
         String getGooglePubsubSubscription();
 
         void setGooglePubsubSubscription(String value);
+
+        @Description("Google BigQuery dataset name")
+        String getGoogleBigqueryDataset();
+
+        void setGoogleBigqueryDataset(String value);
+
+        @Description("Google BigQuery table name")
+        String getGoogleBigqueryTable();
+
+        void setGoogleBigqueryTable(String value);
     }
 
     static class DeserializeFn extends DoFn<PubsubMessage, Message> {
@@ -87,16 +103,16 @@ public class BeaconAnalytics {
         }
     }
 
-    static class PredictSnifferFn extends DoFn<KV<String, Iterable<Message>>, KV<String, String>> {
+    static class PredictSnifferFn extends DoFn<KV<String, Iterable<Message>>, BeaconSniffer> {
         @ProcessElement
-        public void processElement(ProcessContext c) {
+        public void processElement(ProcessContext c, BoundedWindow window) {
             // Group data by snifferAddr
             Map<String, List<Double>> rssi = new HashMap<>();
             for (Message msg : c.element().getValue()) {
                 String key = msg.snifferAddr;
                 Double value = msg.rssi.doubleValue();
                 if (rssi.containsKey(key)) rssi.get(key).add(value);
-                else rssi.put(key, new ArrayList<Double>(Arrays.asList(value)));
+                else rssi.put(key, new ArrayList<>(Arrays.asList(value)));
             }
 
             // Compute median RSSI for each snifferAddr
@@ -121,25 +137,54 @@ public class BeaconAnalytics {
                     maxSnifferAddr = median.getKey();
                 }
             }
-            c.output(KV.of(c.element().getKey(), maxSnifferAddr));
+
+            BeaconSniffer bs = new BeaconSniffer();
+            bs.advAddr = c.element().getKey();
+            bs.snifferAddr = maxSnifferAddr;
+            bs.datetime = window.maxTimestamp();
+            c.output(bs);
         }
     }
 
-    static class FormatAsTextFn extends DoFn<KV<String, String>, String> {
+    static class FormatAsTextFn extends DoFn<BeaconSniffer, String> {
         @ProcessElement
-        public void processElement(ProcessContext c, BoundedWindow window) {
-            c.output(c.element().getKey() + "\t" + c.element().getValue() + "\t" + window.maxTimestamp().toString());
+        public void processElement(ProcessContext c) {
+            BeaconSniffer bs = c.element();
+            c.output(bs.advAddr + "\t" + bs.snifferAddr + "\t" + bs.datetime.toString());
         }
     }
+
+    static class FormatAsTableRowFn extends DoFn<BeaconSniffer, TableRow> {
+        @ProcessElement
+        public void processElement(ProcessContext c) {
+            BeaconSniffer bs = c.element();
+            TableRow row = new TableRow()
+                    .set("adv_addr", bs.advAddr)
+                    .set("sniffer_addr", bs.snifferAddr)
+                    .set("datetime", bs.datetime.getMillis() / 1000.0);
+            c.output(row);
+        }
+    }
+
+    static private TableSchema beaconSnifferSchema = new TableSchema().setFields(
+            ImmutableList.of(
+                    new TableFieldSchema().setName("adv_addr").setType("STRING"),
+                    new TableFieldSchema().setName("sniffer_addr").setType("STRING"),
+                    new TableFieldSchema().setName("datetime").setType("TIMESTAMP")
+            )
+    );
 
     public static void main(String[] args) {
+        // Command line options
         Options options = PipelineOptionsFactory.fromArgs(args).withValidation().as(Options.class);
 
-        Pipeline p = Pipeline.create(options);
-
+        String projectId = options.getGoogleCloudProjectId().trim();
         String subscription = String.format("projects/%s/subscriptions/%s",
-                options.getGoogleCloudProjectId().trim(),
-                options.getGooglePubsubSubscription().trim());
+                projectId, options.getGooglePubsubSubscription().trim());
+        String dataset = options.getGoogleBigqueryDataset().trim();
+        String table = options.getGoogleBigqueryTable().trim();
+
+        Pipeline p = Pipeline.create(options);
 
         PubsubIO.Read<PubsubMessage> reader = PubsubIO
                 .readMessagesWithAttributes()
@@ -156,12 +201,24 @@ public class BeaconAnalytics {
                 .apply(ParDo.of(new KeyByAdvertiserFn()))
                 .apply(GroupByKey.create());
 
-        PCollection<KV<String, String>> nearestSniffer = groupByAdvertiser
+        PCollection<BeaconSniffer> nearestSniffer = groupByAdvertiser
                 .apply(ParDo.of(new PredictSnifferFn()));
 
+        // Write to text file
         nearestSniffer
                 .apply(ParDo.of(new FormatAsTextFn()))
                 .apply(TextIO.write().withWindowedWrites().withNumShards(1).to("/tmp/beam/nearest_sniffer_"));
+
+        // Write to BigQuery
+        String tableUri = projectId + ":" + dataset + "." + table;
+        nearestSniffer
+                .apply(ParDo.of(new FormatAsTableRowFn()))
+                .apply(
+                        BigQueryIO
+                                .writeTableRows()
+                                .to(tableUri)
+                                .withSchema(beaconSnifferSchema)
+                                .withWriteDisposition(BigQueryIO.Write.WriteDisposition.WRITE_APPEND));
 
         p.run().waitUntilFinish();
     }
