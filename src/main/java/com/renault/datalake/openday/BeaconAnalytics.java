@@ -7,7 +7,6 @@ import com.google.common.collect.ImmutableList;
 import com.renault.datalake.openday.common.BeaconSniffer;
 import com.renault.datalake.openday.common.Message;
 import org.apache.beam.sdk.Pipeline;
-import org.apache.beam.sdk.io.TextIO;
 import org.apache.beam.sdk.io.gcp.bigquery.BigQueryIO;
 import org.apache.beam.sdk.io.gcp.pubsub.PubsubIO;
 import org.apache.beam.sdk.io.gcp.pubsub.PubsubMessage;
@@ -111,8 +110,12 @@ public class BeaconAnalytics {
             for (Message msg : c.element().getValue()) {
                 String key = msg.snifferAddr;
                 Double value = msg.rssi.doubleValue();
-                if (rssi.containsKey(key)) rssi.get(key).add(value);
-                else rssi.put(key, new ArrayList<>(Arrays.asList(value)));
+                if (rssi.containsKey(key)) {
+                    rssi.get(key).add(value);
+                } else {
+                    rssi.put(key, new ArrayList<>());
+                    rssi.get(key).add(value);
+                }
             }
 
             // Compute median RSSI for each snifferAddr
@@ -146,14 +149,6 @@ public class BeaconAnalytics {
         }
     }
 
-    static class FormatAsTextFn extends DoFn<BeaconSniffer, String> {
-        @ProcessElement
-        public void processElement(ProcessContext c) {
-            BeaconSniffer bs = c.element();
-            c.output(bs.advAddr + "\t" + bs.snifferAddr + "\t" + bs.datetime.toString());
-        }
-    }
-
     static class FormatAsTableRowFn extends DoFn<BeaconSniffer, TableRow> {
         @ProcessElement
         public void processElement(ProcessContext c) {
@@ -184,6 +179,7 @@ public class BeaconAnalytics {
         String dataset = options.getGoogleBigqueryDataset().trim();
         String table = options.getGoogleBigqueryTable().trim();
 
+        // Pipeline
         Pipeline p = Pipeline.create(options);
 
         PubsubIO.Read<PubsubMessage> reader = PubsubIO
@@ -215,6 +211,7 @@ public class BeaconAnalytics {
                                 .withSchema(beaconSnifferSchema)
                                 .withWriteDisposition(BigQueryIO.Write.WriteDisposition.WRITE_APPEND));
 
+        // Run
         p.run().waitUntilFinish();
     }
 }
