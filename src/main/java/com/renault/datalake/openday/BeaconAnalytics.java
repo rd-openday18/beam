@@ -6,6 +6,7 @@ import com.google.api.services.bigquery.model.TableSchema;
 import com.google.common.collect.ImmutableList;
 import com.renault.datalake.openday.common.BeaconSniffer;
 import com.renault.datalake.openday.common.Message;
+import com.renault.datalake.openday.common.UpsertRedisFn;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.io.gcp.bigquery.BigQueryIO;
 import org.apache.beam.sdk.io.gcp.pubsub.PubsubIO;
@@ -25,6 +26,8 @@ import org.apache.beam.sdk.values.PCollection;
 import org.joda.time.Duration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import redis.clients.jedis.JedisPool;
+import redis.clients.jedis.JedisPoolConfig;
 
 import java.util.*;
 
@@ -52,6 +55,16 @@ public class BeaconAnalytics {
         String getGoogleBigqueryTable();
 
         void setGoogleBigqueryTable(String value);
+
+        @Description("Redis hostname")
+        String getRedisHostname();
+
+        void setRedisHostname(String value);
+
+        @Description("Redis port")
+        String getRedisPort();
+
+        void setRedisPort(String value);
     }
 
     static class DeserializeFn extends DoFn<PubsubMessage, Message> {
@@ -161,6 +174,14 @@ public class BeaconAnalytics {
         }
     }
 
+    static class FormatAsRedisPairFn extends DoFn<BeaconSniffer, KV<String, String>> {
+        @ProcessElement
+        public void processElement(ProcessContext c) {
+            BeaconSniffer bs = c.element();
+            c.output(KV.of(bs.advAddr, bs.toJson()));
+        }
+    }
+
     static private TableSchema beaconSnifferSchema = new TableSchema().setFields(
             ImmutableList.of(
                     new TableFieldSchema().setName("adv_addr").setType("STRING"),
@@ -178,6 +199,10 @@ public class BeaconAnalytics {
                 projectId, options.getGooglePubsubSubscription().trim());
         String dataset = options.getGoogleBigqueryDataset().trim();
         String table = options.getGoogleBigqueryTable().trim();
+        String redisHostname = options.getRedisHostname().trim();
+        Integer redisPort = Integer.parseInt(options.getRedisPort().trim());
+
+        JedisPool pool = new JedisPool(new JedisPoolConfig(), redisHostname, redisPort);
 
         // Pipeline
         Pipeline p = Pipeline.create(options);
@@ -210,6 +235,11 @@ public class BeaconAnalytics {
                                 .to(tableUri)
                                 .withSchema(beaconSnifferSchema)
                                 .withWriteDisposition(BigQueryIO.Write.WriteDisposition.WRITE_APPEND));
+
+        // Write to Redis
+        nearestSniffer
+                .apply(ParDo.of(new FormatAsRedisPairFn()))
+                .apply(ParDo.of(new UpsertRedisFn(redisHostname, redisPort)));
 
         // Run
         p.run().waitUntilFinish();

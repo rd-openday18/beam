@@ -47,6 +47,7 @@
         <hadoop.version>2.7.3</hadoop.version>
         <maven-surefire-plugin.version>2.20.1</maven-surefire-plugin.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <jedis.version>2.9.0</jedis.version>
     </properties>
 
     <repositories>
@@ -443,6 +444,12 @@
             <groupId>org.apache.beam</groupId>
             <artifactId>beam-runners-google-cloud-dataflow-java</artifactId>
             <version>${beam.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>redis.clients</groupId>
+            <artifactId>jedis</artifactId>
+            <version>${jedis.version}</version>
         </dependency>
     </dependencies>
 </project>
