@@ -97,11 +97,13 @@ public class BeaconAnalytics {
         }
     }
 
-    static class FilterBeaconsFn extends DoFn<Message, Message> {
+    static class FilterFn extends DoFn<Message, Message> {
         @ProcessElement
         public void processElement(ProcessContext c) {
             Message msg = c.element();
-            if (msg.advertiserAddr.startsWith("18:7a:93:")) {
+            boolean isBeacon = msg.advertiserAddr.startsWith("18:7a:93:");
+            boolean isRaspberry = msg.snifferAddr.startsWith("b8:27:eb:");
+            if (isBeacon && isRaspberry) {
                 c.output(msg);
             }
         }
@@ -213,7 +215,7 @@ public class BeaconAnalytics {
 
         PCollection<Message> input = p.apply(reader)
                 .apply(ParDo.of(new DeserializeFn()))
-                .apply(ParDo.of(new FilterBeaconsFn()));
+                .apply(ParDo.of(new FilterFn()));
 
         PCollection<Message> windowedInput = input.apply(
                 Window.into(FixedWindows.of(Duration.standardSeconds(10))));
