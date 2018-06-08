@@ -176,11 +176,11 @@ public class BeaconAnalytics {
         }
     }
 
-    static class FormatAsRedisPairFn extends DoFn<BeaconSniffer, KV<String, String>> {
+    static class FormatAsRedisPairFn extends DoFn<BeaconSniffer, KV<String, BeaconSniffer>> {
         @ProcessElement
         public void processElement(ProcessContext c) {
             BeaconSniffer bs = c.element();
-            c.output(KV.of(bs.advAddr, bs.toJson()));
+            c.output(KV.of(bs.advAddr, bs));
         }
     }
 
