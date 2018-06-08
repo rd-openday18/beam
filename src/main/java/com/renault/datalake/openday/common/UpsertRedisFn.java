@@ -2,22 +2,19 @@ package com.renault.datalake.openday.common;
 
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.values.KV;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import redis.clients.jedis.Jedis;
-import redis.clients.jedis.Pipeline;
 
-public class UpsertRedisFn extends DoFn<KV<String, String>, Void> {
+public class UpsertRedisFn extends DoFn<KV<String, BeaconSniffer>, Void> {
 
-    private static final int DEFAULT_BATCH_SIZE = 10;
+    private static final Logger LOG = LoggerFactory.getLogger(UpsertRedisFn.class);
     private static final long EXPIRE_TIME_MS = 3 * 60 * 1000;
 
     private String redisHost;
     private Integer redisPort;
-    private Long now;
 
     private transient Jedis jedis;
-    private transient Pipeline pipeline;
-
-    private int batchCount;
 
     public UpsertRedisFn(String redisHost, Integer redisPort) {
         this.redisHost = redisHost;
@@ -29,41 +26,33 @@ public class UpsertRedisFn extends DoFn<KV<String, String>, Void> {
         jedis = new Jedis(redisHost, redisPort);
     }
 
-    @StartBundle
-    public void startBundle() {
-        now = System.currentTimeMillis();
-        pipeline = jedis.pipelined();
-        pipeline.multi();
-        batchCount = 0;
-    }
-
     @ProcessElement
     public void processElement(ProcessContext processContext) {
-        KV<String, String> record = processContext.element();
-        pipeline.set(record.getKey(), record.getValue());
-        pipeline.expireAt(record.getKey(), now + EXPIRE_TIME_MS);
+        KV<String, BeaconSniffer> record = processContext.element();
 
-        batchCount++;
-
-        if (batchCount >= DEFAULT_BATCH_SIZE) {
-            flush();
+        String value = jedis.get(record.getKey());
+        if (value == null) {
+            jedis.set(record.getKey(), record.getValue().toJson());
+            jedis.expireAt(record.getKey(), System.currentTimeMillis() + EXPIRE_TIME_MS);
+            return;
         }
-    }
 
-    @FinishBundle
-    public void finishBundle() {
-        flush();
+        BeaconSniffer curBs = BeaconSniffer.fromJson(value);
+        if (curBs == null)
+            return;
+
+        BeaconSniffer newBs = record.getValue();
+
+        if (curBs.datetime.isBefore(newBs.datetime)) {
+            LOG.info(String.format("Setting key %s at %s from %s to %s",
+                    newBs.advAddr, newBs.datetime.toString(), curBs.snifferAddr, newBs.snifferAddr));
+            jedis.set(record.getKey(), newBs.toJson());
+            jedis.expireAt(record.getKey(), System.currentTimeMillis() + EXPIRE_TIME_MS);
+        }
     }
 
     @Teardown
     public void teardown() {
         jedis.close();
-    }
-
-    private void flush() {
-        if (!pipeline.isInMulti())
-            pipeline.multi();
-        pipeline.exec();
-        batchCount = 0;
     }
 }
