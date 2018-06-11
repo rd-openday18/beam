@@ -118,6 +118,44 @@ public class BeaconAnalytics {
     }
 
     static class PredictSnifferFn extends DoFn<KV<String, Iterable<Message>>, BeaconSniffer> {
+
+        private String method;
+
+        public PredictSnifferFn(String method) {
+            super();
+            if (!method.equals("mean") && !method.equals("median"))
+                throw new IllegalArgumentException("Method must be equal to 'mean' or 'median'");
+            this.method = method;
+        }
+
+        private Map<String, Double> computeMedians(Map<String, List<Double>> rssi) {
+            rssi.forEach((k, v) -> Collections.sort(v));
+            Map<String, Double> medians = new HashMap<>();
+            for (Map.Entry<String, List<Double>> entry : rssi.entrySet()) {
+                List<Double> values = entry.getValue();
+                int size = values.size();
+                if (size % 2 == 0) {
+                    medians.put(entry.getKey(), 0.5 * (values.get(size / 2) + values.get(size / 2 - 1)));
+                } else {
+                    medians.put(entry.getKey(), values.get((size - 1)) / 2);
+                }
+            }
+            return medians;
+        }
+
+        private Map<String, Double> computeMeans(Map<String, List<Double>> rssi) {
+            Map<String, Double> means = new HashMap<>();
+            for (Map.Entry<String, List<Double>> entry : rssi.entrySet()) {
+                List<Double> values = entry.getValue();
+                Double sum = 0.0;
+                for (Double v : values) {
+                    sum += v;
+                }
+                means.put(entry.getKey(), sum / values.size());
+            }
+            return means;
+        }
+
         @ProcessElement
         public void processElement(ProcessContext c, BoundedWindow window) {
             // Group data by snifferAddr
@@ -133,23 +171,16 @@ public class BeaconAnalytics {
                 }
             }
 
-            // Compute median RSSI for each snifferAddr
-            rssi.forEach((k, v) -> Collections.sort(v));
-            Map<String, Double> medians = new HashMap<>();
-            for (Map.Entry<String, List<Double>> entry : rssi.entrySet()) {
-                List<Double> values = entry.getValue();
-                int size = values.size();
-                if (size % 2 == 0) {
-                    medians.put(entry.getKey(), 0.5 * (values.get(size / 2) + values.get(size / 2 - 1)));
-                } else {
-                    medians.put(entry.getKey(), values.get((size - 1)) / 2);
-                }
-            }
+            Map<String, Double> stats = null;
+            if (method.equals("mean"))
+                stats = computeMeans(rssi);
+            else if (method.equals("median"))
+                stats = computeMedians(rssi);
 
-            // Compute the nearest snifferAddr by taking maximum median
+            // Compute the nearest snifferAddr by taking maximum
             String maxSnifferAddr = null;
             Double maxMedianSnifferAddr = Double.NEGATIVE_INFINITY;
-            for (Map.Entry<String, Double> median : medians.entrySet()) {
+            for (Map.Entry<String, Double> median : stats.entrySet()) {
                 if (median.getValue() > maxMedianSnifferAddr) {
                     maxMedianSnifferAddr = median.getValue();
                     maxSnifferAddr = median.getKey();
@@ -225,7 +256,7 @@ public class BeaconAnalytics {
                 .apply(GroupByKey.create());
 
         PCollection<BeaconSniffer> nearestSniffer = groupByAdvertiser
-                .apply(ParDo.of(new PredictSnifferFn()));
+                .apply(ParDo.of(new PredictSnifferFn("mean")));
 
         // Write to BigQuery
         String tableUri = projectId + ":" + dataset + "." + table;
